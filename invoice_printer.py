@@ -48,16 +48,10 @@ DRY_RUN = "--dry-run" in sys.argv
 
 
 def get_target_period():
-    """対象期間（前月の1日〜末日）を返す"""
+    """対象期間（当月1日〜実行日）を返す"""
     today = datetime.date.today()
-    # 前月の1日
-    if today.month == 1:
-        first_day = datetime.date(today.year - 1, 12, 1)
-    else:
-        first_day = datetime.date(today.year, today.month - 1, 1)
-    # 前月の末日
-    last_day_num = calendar.monthrange(first_day.year, first_day.month)[1]
-    last_day = datetime.date(first_day.year, first_day.month, last_day_num)
+    first_day = datetime.date(today.year, today.month, 1)
+    last_day = today
     return first_day, last_day
 
 
