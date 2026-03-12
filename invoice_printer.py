@@ -37,7 +37,7 @@ SLACK_WEBHOOK_URL = os.environ.get("INVOICE_SLACK_WEBHOOK", "")
 # 印刷設定
 SCRIPT_DIR = Path(__file__).parent
 SUMATRA_PATH = SCRIPT_DIR / "SumatraPDF" / "SumatraPDF.exe"
-PRINTER_NAME = ""  # 空ならデフォルトプリンター
+PRINTER_NAME = "Brother DCP-J528N Printer (2 コピー)"
 
 # 処理済みメール記録
 PROCESSED_FILE = SCRIPT_DIR / "processed.json"
