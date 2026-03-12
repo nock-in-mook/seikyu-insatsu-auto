@@ -264,26 +264,40 @@ def send_slack_report(results, missing_senders, period_str=""):
     if not results and not missing_senders:
         lines.append("新しいメールはありませんでした。")
     else:
-        # 印刷した請求書
         printed = [r for r in results if r.get("printed")]
-        for r in printed:
-            lines.append(f"✅ *{r['company_name']}* — {r['invoice_summary']}")
-            for fn in r.get("filenames", []):
-                lines.append(f"　　📄 {fn}")
+        skipped = [r for r in results if not r.get("is_invoice")]
+        errors = [r for r in results if r.get("error")]
+
+        # 【印刷したファイル】を会社ごとにまとめる
+        if printed:
+            # 会社名→ファイル名リストを集約
+            company_files = {}
+            for r in printed:
+                name = r["company_name"]
+                if name not in company_files:
+                    company_files[name] = []
+                company_files[name].extend(r.get("filenames", []))
+
+            total_files = sum(len(files) for files in company_files.values())
+            lines.append(f"*【印刷したファイル】*")
+            lines.append(f"合計 {total_files} ファイル\n")
+            for company, files in company_files.items():
+                lines.append(f"✅ *{company}* — {len(files)}ファイル")
+                for fn in files:
+                    lines.append(f"　　・{fn}")
 
         # スキップしたメール
-        skipped = [r for r in results if not r.get("is_invoice")]
-        for r in skipped:
-            lines.append(f"⏭️ *{r['sender']}* — 請求書ではないと判定")
-            lines.append(f"　　理由: {r['reason']}")
+        if skipped:
+            lines.append(f"\n*【スキップ】*")
+            for r in skipped:
+                lines.append(f"⏭️ *{r['sender']}* — 請求書ではないと判定")
+                lines.append(f"　　理由: {r['reason']}")
 
         # エラー
-        errors = [r for r in results if r.get("error")]
-        for r in errors:
-            lines.append(f"❌ *エラー* ({r['sender']}): {r['error']}")
-
-        # 集計
-        lines.append(f"\n📊 合計: {len(results)}件 | 印刷: {len(printed)}件 | スキップ: {len(skipped)}件 | エラー: {len(errors)}件")
+        if errors:
+            lines.append(f"\n*【エラー】*")
+            for r in errors:
+                lines.append(f"❌ ({r['sender']}): {r['error']}")
 
     # 必須送信者の未着チェック
     if missing_senders:
