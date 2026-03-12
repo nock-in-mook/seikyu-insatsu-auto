@@ -216,15 +216,117 @@ def classify_email(sender, subject, body, attachment_names):
 
 # ===== 印刷 =====
 
+def get_printer_status(printer_name):
+    """プリンターのステータスを取得する"""
+    import win32print
+    try:
+        handle = win32print.OpenPrinter(printer_name)
+        info = win32print.GetPrinter(handle, 2)
+        win32print.ClosePrinter(handle)
+        return info["Status"]
+    except Exception:
+        return -1
+
+
+def get_print_jobs(printer_name):
+    """プリンターのジョブ一覧を取得する"""
+    import win32print
+    try:
+        handle = win32print.OpenPrinter(printer_name)
+        jobs = win32print.EnumJobs(handle, 0, 100, 1)
+        win32print.ClosePrinter(handle)
+        return jobs
+    except Exception:
+        return []
+
+
+# プリンターステータスコードの主要なもの
+PRINTER_STATUS_ERRORS = {
+    0x00000002: "プリンターエラー",
+    0x00000004: "用紙切れ (情報待ち)",
+    0x00000008: "トナー/インク切れ",
+    0x00000010: "用紙詰まり",
+    0x00000020: "用紙切れ",
+    0x00000040: "手差し給紙が必要",
+    0x00000080: "用紙問題",
+    0x00000100: "オフライン",
+    0x00000800: "ドアが開いている",
+    0x00010000: "サーバー不明エラー",
+    0x00080000: "電源オフ",
+}
+
+# ジョブステータス
+JOB_STATUS_ERROR = 0x00000002
+JOB_STATUS_OFFLINE = 0x00000020
+JOB_STATUS_PAPEROUT = 0x00000040
+JOB_STATUS_PRINTED = 0x00000080
+JOB_STATUS_COMPLETE = 0x00001000
+
+
+def wait_for_print_completion(printer_name, filename, timeout_sec=180):
+    """印刷ジョブの完了を監視する。成功ならTrue、エラーなら(False, エラー詳細)を返す"""
+    import time
+
+    start = time.time()
+    found_job = False
+
+    while time.time() - start < timeout_sec:
+        # プリンター自体のステータスチェック
+        status = get_printer_status(printer_name)
+        if status > 0:
+            for code, msg in PRINTER_STATUS_ERRORS.items():
+                if status & code:
+                    return False, msg
+
+        # ジョブ一覧をチェック
+        jobs = get_print_jobs(printer_name)
+        my_jobs = [j for j in jobs if filename.lower() in j.get("pDocument", "").lower()]
+
+        if my_jobs:
+            found_job = True
+            for job in my_jobs:
+                job_status = job.get("Status", 0)
+                if job_status & JOB_STATUS_ERROR:
+                    return False, "印刷ジョブエラー"
+                if job_status & JOB_STATUS_PAPEROUT:
+                    return False, "用紙切れ"
+                if job_status & JOB_STATUS_OFFLINE:
+                    return False, "プリンターオフライン"
+                if job_status & (JOB_STATUS_PRINTED | JOB_STATUS_COMPLETE):
+                    return True, "印刷完了"
+        elif found_job:
+            # ジョブがキューから消えた = 印刷完了
+            return True, "印刷完了（ジョブ完了）"
+
+        time.sleep(2)
+
+    # タイムアウト
+    if not found_job:
+        # ジョブが見つからなかった場合はスプーラ処理が速すぎた可能性 → 成功扱い
+        return True, "印刷完了（高速処理）"
+    return False, f"タイムアウト（{timeout_sec}秒）"
+
+
 def print_pdf(pdf_path):
-    """SumatraPDFでPDFを印刷する"""
+    """SumatraPDFでPDFを印刷し、完了を監視する"""
     if DRY_RUN:
         print(f"  [DRY RUN] 印刷スキップ: {pdf_path}")
-        return True
+        return True, "DRY RUN"
 
     if not SUMATRA_PATH.exists():
-        print(f"  エラー: SumatraPDFが見つかりません: {SUMATRA_PATH}")
-        return False
+        msg = f"SumatraPDFが見つかりません: {SUMATRA_PATH}"
+        print(f"  エラー: {msg}")
+        return False, msg
+
+    # 印刷前にプリンターステータス確認
+    printer = PRINTER_NAME or None
+    if printer:
+        status = get_printer_status(printer)
+        if status > 0:
+            for code, msg in PRINTER_STATUS_ERRORS.items():
+                if status & code:
+                    print(f"  プリンターエラー: {msg}")
+                    return False, f"印刷前エラー: {msg}"
 
     cmd = [str(SUMATRA_PATH), "-print-to-default", "-silent", str(pdf_path)]
     if PRINTER_NAME:
@@ -232,15 +334,27 @@ def print_pdf(pdf_path):
 
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=120)
-        if result.returncode == 0:
-            print(f"  印刷成功: {pdf_path.name}")
-            return True
-        else:
-            print(f"  印刷失敗 (code {result.returncode}): {result.stderr.decode(errors='replace')}")
-            return False
+        if result.returncode != 0:
+            msg = f"SumatraPDF失敗 (code {result.returncode})"
+            print(f"  {msg}")
+            return False, msg
     except subprocess.TimeoutExpired:
-        print(f"  印刷タイムアウト: {pdf_path.name}")
-        return False
+        msg = "SumatraPDFタイムアウト"
+        print(f"  {msg}")
+        return False, msg
+
+    # スプーラ監視
+    if printer:
+        print(f"  印刷ジョブ監視中: {pdf_path.name}")
+        success, detail = wait_for_print_completion(printer, pdf_path.stem)
+        if success:
+            print(f"  ✓ {detail}: {pdf_path.name}")
+        else:
+            print(f"  ✗ {detail}: {pdf_path.name}")
+        return success, detail
+    else:
+        print(f"  印刷ジョブ送信完了: {pdf_path.name}")
+        return True, "スプーラ送信済み"
 
 
 # ===== Slack通知 =====
@@ -408,16 +522,19 @@ def main():
         if result["is_invoice"] and pdf_attachments:
             result["printed"] = True
             print_success = True
+            print_errors = []
             with tempfile.TemporaryDirectory() as tmpdir:
                 for att in pdf_attachments:
                     pdf_path = Path(tmpdir) / att["filename"]
                     with open(pdf_path, "wb") as f:
                         f.write(att["data"])
-                    if not print_pdf(pdf_path):
+                    success, detail = print_pdf(pdf_path)
+                    if not success:
                         print_success = False
-                        result["error"] = f"印刷失敗: {att['filename']}"
+                        print_errors.append(f"{att['filename']}: {detail}")
             if not print_success:
                 result["printed"] = False
+                result["error"] = "印刷失敗 — " + "; ".join(print_errors)
         elif result["is_invoice"] and not pdf_attachments:
             result["printed"] = False
             result["error"] = "請求書と判定されたがPDF添付なし"
