@@ -1,6 +1,6 @@
 """
 請求書自動印刷スクリプト
-- IMAPでメール取得（日付ベース、過去35日）
+- IMAPでメール取得（前月1日〜末日）
 - Claude APIで請求書判定
 - PDF添付を自動印刷
 - Slackにレポート送信
@@ -14,6 +14,7 @@ import sys
 import json
 import subprocess
 import tempfile
+import calendar
 import datetime
 from pathlib import Path
 
@@ -42,11 +43,22 @@ PRINTER_NAME = "Brother DCP-J528N Printer (2 コピー)"
 # 処理済みメール記録
 PROCESSED_FILE = SCRIPT_DIR / "processed.json"
 
-# 過去何日分を対象にするか
-LOOKBACK_DAYS = 35
-
 # ドライランモード（--dry-run で有効）
 DRY_RUN = "--dry-run" in sys.argv
+
+
+def get_target_period():
+    """対象期間（前月の1日〜末日）を返す"""
+    today = datetime.date.today()
+    # 前月の1日
+    if today.month == 1:
+        first_day = datetime.date(today.year - 1, 12, 1)
+    else:
+        first_day = datetime.date(today.year, today.month - 1, 1)
+    # 前月の末日
+    last_day_num = calendar.monthrange(first_day.year, first_day.month)[1]
+    last_day = datetime.date(first_day.year, first_day.month, last_day_num)
+    return first_day, last_day
 
 
 # ===== ユーティリティ =====
@@ -123,19 +135,20 @@ def save_processed(processed):
 
 # ===== IMAP =====
 
-def fetch_emails():
-    """IMAPから過去N日分のメールを取得する"""
+def fetch_emails(first_day, last_day):
+    """IMAPから指定期間のメールを取得する"""
     print(f"IMAP接続中: {IMAP_HOST}:{IMAP_PORT}")
+    print(f"対象期間: {first_day} 〜 {last_day}")
     mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
     mail.login(IMAP_USER, IMAP_PASS)
     mail.select("INBOX")
 
-    # 過去N日分の日付
-    since_date = (datetime.datetime.now() - datetime.timedelta(days=LOOKBACK_DAYS))
-    date_str = since_date.strftime("%d-%b-%Y")
+    # IMAP SINCE/BEFORE で期間指定（BEFOREは「その日より前」なので+1日）
+    since_str = first_day.strftime("%d-%b-%Y")
+    before_date = last_day + datetime.timedelta(days=1)
+    before_str = before_date.strftime("%d-%b-%Y")
 
-    # 日付ベースで検索
-    status, message_ids = mail.search(None, f'(SINCE {date_str})')
+    status, message_ids = mail.search(None, f'(SINCE {since_str} BEFORE {before_str})')
     if status != "OK" or not message_ids[0]:
         print("対象メールなし")
         mail.logout()
@@ -163,7 +176,15 @@ def classify_email(sender, subject, body, attachment_names):
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
+    # 送信元のマッピング情報を構築
+    sender_info_lines = "\n".join(
+        f"  - {addr} → {name}" for addr, name in REQUIRED_SENDERS.items()
+    )
+
     prompt = f"""以下のメールを分析し、請求書（invoice）に関するメールかどうか判定してください。
+
+【既知の取引先一覧】
+{sender_info_lines}
 
 送信者: {sender}
 件名: {subject}
@@ -176,7 +197,7 @@ def classify_email(sender, subject, body, attachment_names):
 {{
   "is_invoice": true または false,
   "confidence": 0.0〜1.0の数値,
-  "company_name": "送信元の会社名（わかれば）",
+  "company_name": "送信元の会社名（上記の取引先一覧に該当すればその名称を使うこと）",
   "invoice_summary": "請求内容の要約（金額があれば含める）",
   "reason": "判定理由を1行で"
 }}"""
@@ -230,14 +251,15 @@ def print_pdf(pdf_path):
 
 # ===== Slack通知 =====
 
-def send_slack_report(results, missing_senders):
+def send_slack_report(results, missing_senders, period_str=""):
     """Slackにレポートを送信する"""
     import requests
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     prefix = "[DRY RUN] " if DRY_RUN else ""
 
-    lines = [f"📬 *{prefix}請求書自動印刷レポート* ({now})\n"]
+    lines = [f"📬 *{prefix}請求書自動印刷レポート* ({now})"]
+    lines.append(f"📅 *対象期間: {period_str}*\n")
 
     if not results and not missing_senders:
         lines.append("新しいメールはありませんでした。")
@@ -302,16 +324,21 @@ def main():
         print(f"エラー: 環境変数が未設定です: {', '.join(missing_env)}")
         sys.exit(1)
 
+    # 対象期間（前月）
+    first_day, last_day = get_target_period()
+    period_str = f"{first_day.year}年{first_day.month}月"
+    print(f"対象月: {period_str}")
+
     # 処理済みリスト読み込み
     processed = load_processed()
 
     # メール取得
     try:
-        emails = fetch_emails()
+        emails = fetch_emails(first_day, last_day)
     except Exception as e:
         error_msg = f"IMAP接続エラー: {e}"
         print(error_msg)
-        send_slack_report([{"sender": "SYSTEM", "error": error_msg}], {})
+        send_slack_report([{"sender": "SYSTEM", "error": error_msg}], {}, period_str)
         sys.exit(1)
 
     results = []
@@ -411,7 +438,7 @@ def main():
             missing_senders[addr] = name
 
     # Slack通知
-    send_slack_report(results, missing_senders)
+    send_slack_report(results, missing_senders, period_str)
 
     print("\n完了!")
 
