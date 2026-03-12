@@ -27,8 +27,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # 必ず届くはずの送信元（未着チェック用）
 REQUIRED_SENDERS = {
-    "yabu@k--ing.com": "K--ing（藪様）",
-    "sato@toshu-llc.co.jp": "東秀LLC（佐藤様）",
+    "yabu@k--ing.com": "(有)ケーイング（藪様）",
+    "sato@toshu-llc.co.jp": "合同会社トーシュー（佐藤様）",
 }
 
 # Slack通知
