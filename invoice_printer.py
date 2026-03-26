@@ -399,13 +399,13 @@ def send_slack_report(results, missing_senders, period_str=""):
             lines.append(f"\n*【スキップ】*")
             for r in skipped:
                 lines.append(f"⏭️ *{r['sender']}* — 請求書ではないと判定")
-                lines.append(f"　　理由: {r['reason']}")
+                lines.append(f"　　理由: {r.get('reason', '不明')}")
 
         # エラー
         if errors:
             lines.append(f"\n*【エラー】*")
             for r in errors:
-                lines.append(f"❌ ({r['sender']}): {r['error']}")
+                lines.append(f"❌ ({r.get('sender', '不明')}): {r.get('error', '不明なエラー')}")
 
     # 必須送信者の未着チェック
     if missing_senders:
@@ -563,9 +563,14 @@ def main():
             missing_senders[addr] = name
 
     # Slack通知
-    send_slack_report(results, missing_senders, period_str)
+    try:
+        send_slack_report(results, missing_senders, period_str)
+    except Exception as e:
+        print(f"Slack通知でエラー: {e}")
 
-    print("\n完了!")
+    # エラーがあっても正常終了（ログとSlack通知で把握する）
+    has_errors = any(r.get("error") for r in results)
+    print(f"\n完了!{'（一部エラーあり）' if has_errors else ''}")
 
 
 if __name__ == "__main__":
