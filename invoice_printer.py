@@ -198,7 +198,7 @@ def classify_email(sender, subject, body, attachment_names):
 }}"""
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash"),
         contents=prompt,
         config=types.GenerateContentConfig(
             temperature=0,
