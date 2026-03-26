@@ -551,8 +551,9 @@ def main():
             "processed_at": datetime.datetime.now().isoformat(),
         }
 
-    # 処理済みリスト保存
-    save_processed(processed)
+    # 処理済みリスト保存（dry-runでは保存しない）
+    if not DRY_RUN:
+        save_processed(processed)
 
     # 必須送信者の未着チェック
     missing_senders = {}
