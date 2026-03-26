@@ -197,19 +197,33 @@ def classify_email(sender, subject, body, attachment_names):
   "reason": "判定理由を1行で"
 }}"""
 
-    response = client.models.generate_content(
-        model=os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash"),
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0,
-            max_output_tokens=2048,
-            response_mime_type="application/json",
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
+    # フォールバック付きでモデル呼び出し
+    main_model = os.environ.get("GEMINI_FLASH_MODEL", "gemini-2.5-flash")
+    fallbacks = [m.strip() for m in os.environ.get("GEMINI_FLASH_FALLBACKS", "gemini-2.0-flash").split(",") if m.strip()]
+    all_models = [main_model] + fallbacks
+    config = types.GenerateContentConfig(
+        temperature=0,
+        max_output_tokens=2048,
+        response_mime_type="application/json",
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
 
-    text = response.text.strip()
-    return json.loads(text)
+    last_err = None
+    for model_name in all_models:
+        try:
+            response = client.models.generate_content(
+                model=model_name, contents=prompt, config=config,
+            )
+            text = response.text.strip()
+            return json.loads(text)
+        except Exception as e:
+            err_str = str(e).lower()
+            if any(kw in err_str for kw in ["not found", "404", "deprecated", "decommissioned"]):
+                print(f"  モデル {model_name} 利用不可、次を試行...")
+                last_err = e
+                continue
+            raise
+    raise RuntimeError(f"全Geminiモデルが利用不可: {all_models}") from last_err
 
 
 # ===== 印刷 =====
