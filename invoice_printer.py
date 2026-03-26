@@ -1,7 +1,7 @@
 """
 請求書自動印刷スクリプト
-- IMAPでメール取得（前月1日〜末日）
-- Claude APIで請求書判定
+- IMAPでメール取得（当月1日〜実行日）
+- Gemini Flash APIで請求書判定
 - PDF添付を自動印刷
 - Slackにレポート送信
 """
@@ -24,7 +24,7 @@ IMAP_PORT = 993
 IMAP_USER = "invoice@y-kyo.com"
 IMAP_PASS = os.environ.get("INVOICE_IMAP_PASS", "")
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # 必ず届くはずの送信元（未着チェック用）
 REQUIRED_SENDERS = {
@@ -165,10 +165,11 @@ def fetch_emails(first_day, last_day):
 # ===== Claude API 判定 =====
 
 def classify_email(sender, subject, body, attachment_names):
-    """Claude APIでメールが請求書かどうか判定する"""
-    import anthropic
+    """Gemini Flash APIでメールが請求書かどうか判定する"""
+    from google import genai
+    from google.genai import types
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
     # 送信元のマッピング情報を構築
     sender_info_lines = "\n".join(
@@ -196,21 +197,18 @@ def classify_email(sender, subject, body, attachment_names):
   "reason": "判定理由を1行で"
 }}"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=500,
-        temperature=0,
-        messages=[{"role": "user", "content": prompt}],
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0,
+            max_output_tokens=2048,
+            response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
     )
 
-    text = response.content[0].text.strip()
-    # JSON部分を抽出
-    if "```" in text:
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-
+    text = response.text.strip()
     return json.loads(text)
 
 
@@ -438,8 +436,8 @@ def main():
     missing_env = []
     if not IMAP_PASS:
         missing_env.append("INVOICE_IMAP_PASS")
-    if not ANTHROPIC_API_KEY:
-        missing_env.append("ANTHROPIC_API_KEY")
+    if not GEMINI_API_KEY:
+        missing_env.append("GEMINI_API_KEY")
     if not SLACK_WEBHOOK_URL:
         missing_env.append("INVOICE_SLACK_WEBHOOK")
     if missing_env:
